@@ -1,0 +1,117 @@
+const WebSocket = require("ws");
+
+const PORT = process.env.PORT || 8080;
+const wss = new WebSocket.Server({ port: PORT });
+
+const rooms = new Map();
+
+function send(ws, data) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(data));
+  }
+}
+
+function removeRoom(id) {
+  const room = rooms.get(id);
+  if (!room) return;
+
+  send(room.camera, { type: "peer-left" });
+  send(room.viewer, { type: "peer-left" });
+
+  rooms.delete(id);
+}
+
+wss.on("connection", socket => {
+  let roomId = null;
+  let role = null;
+
+  socket.on("message", message => {
+    try {
+      const d = JSON.parse(message.toString());
+      const id = String(d.room || "");
+
+      if (d.type === "create-room") {
+        if (!/^\d{6}$/.test(id) || rooms.has(id)) {
+          return send(socket, {type:"error"});
+        }
+
+        rooms.set(id, {
+          camera: socket,
+          viewer: null,
+          accepted: false,
+          expires: Date.now() + 10 * 60 * 1000
+        });
+
+        roomId = id;
+        role = "camera";
+
+        return send(socket, {type:"room-created"});
+      }
+
+      const r = rooms.get(id);
+
+      if (!r || Date.now() > r.expires) {
+        removeRoom(id);
+        return send(socket, {type:"error"});
+      }
+
+      if (d.type === "join-room") {
+        if (r.viewer || r.camera === socket) {
+          return send(socket, {type:"error"});
+        }
+
+        r.viewer = socket;
+        roomId = id;
+        role = "viewer";
+
+        send(socket, {type:"room-joined"});
+        send(r.camera, {type:"viewer-request"});
+        return;
+      }
+
+      if (roomId !== id) return;
+
+      if (d.type === "accept" && role === "camera") {
+        r.accepted = true;
+        send(r.viewer, {type:"accepted"});
+        return;
+      }
+
+      if (d.type === "reject" && role === "camera") {
+        send(r.viewer, {type:"rejected"});
+        r.viewer = null;
+        return;
+      }
+
+      if (!r.accepted) return;
+
+      const target =
+        role === "camera" ? r.viewer : r.camera;
+
+      if (["offer","answer","ice"].includes(d.type)) {
+        send(target, d);
+      }
+
+      if (d.type === "leave") {
+        removeRoom(id);
+        roomId = null;
+        role = null;
+      }
+
+    } catch (e) {
+      send(socket, {type:"error"});
+    }
+  });
+
+  socket.on("close", () => {
+    if (roomId) removeRoom(roomId);
+  });
+});
+
+setInterval(() => {
+  for (const [id, room] of rooms) {
+    if (Date.now() > room.expires) removeRoom(id);
+  }
+}, 30000);
+
+console.log("SRX CAM LIVE SERVER RUNNING");
