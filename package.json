@@ -1,0 +1,12 @@
+{
+  "name": "srx-cam-live",
+  "version": "1.0.0",
+  "description": "SRX CAM LIVE Own Signaling Server",
+  "main": "srx come live",
+  "scripts": {
+    "start": "node \"srx come live\""
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
